@@ -1,0 +1,8 @@
+torch
+torchvision
+transformers
+pandas
+Pillow
+tqdm
+streamlit
+huggingface-hub
