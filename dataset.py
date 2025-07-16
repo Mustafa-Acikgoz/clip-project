@@ -44,7 +44,7 @@ class Flickr8kDataset(Dataset):
         try:
             img = Image.open(self.image_paths[idx]).convert("RGB")
             item['image'] = self.transform(img)
-        except (FileNotFoundError, UnidentifiedImageError):
+        except (FileNotFoundError):
             print(f"Warning: Could not load image at {self.image_paths[idx]}. Returning a black image.")
             item['image'] = torch.zeros((3, 224, 224))
         item["caption_text"] = self.captions[idx]
