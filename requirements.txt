@@ -1,0 +1,7 @@
+gradio
+torch
+torchvision
+transformers
+Pillow
+requests
+huggingface-hub
