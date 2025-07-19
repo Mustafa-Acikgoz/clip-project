@@ -1,9 +1,7 @@
-streamlit
+gradio
 torch
 torchvision
 transformers
-pandas
 Pillow
-tqdm
+requests
 huggingface-hub
-altair

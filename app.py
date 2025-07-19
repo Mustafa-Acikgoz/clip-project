@@ -1,4 +1,4 @@
-import streamlit as st
+import gradio as gr
 import torch
 import torch.nn.functional as F
 from PIL import Image
@@ -6,46 +6,31 @@ import requests
 from io import BytesIO
 from torchvision import transforms
 from transformers import DistilBertTokenizer
+import config # Your config file
+from inference_model import CLIPModel # Your model class file
 
-# --- Custom Modules ---
-import config
-# This is the updated import line to use the new inference-specific model file
-from inference_model import CLIPModel 
+# --- 1. Load Model and Tokenizer (runs only once) ---
+# This section loads your trained model and tokenizer when the app starts.
+device = config.DEVICE
 
-# --- App Configuration ---
-st.set_page_config(page_title="CLIP Image-Text Search", layout="wide")
+# Load model with dimensions from config
+model = CLIPModel(
+    image_embedding_dim=config.IMAGE_EMBEDDING_DIM,
+    text_embedding_dim=config.TEXT_EMBEDDING_DIM,
+    projection_dim=config.PROJECTION_DIM
+).to(device)
 
-# --- Model & Tokenizer Loading ---
-@st.cache_resource
-def load_app_essentials():
-    """Load the CLIP model and tokenizer. Cached for performance."""
-    device = config.DEVICE
-    
-    # Instantiate the model with dimensions from config
-    model = CLIPModel(
-        image_embedding_dim=config.IMAGE_EMBEDDING_DIM,
-        text_embedding_dim=config.TEXT_EMBEDDING_DIM,
-        projection_dim=config.PROJECTION_DIM
-    ).to(device)
-    
-    # Load the trained model weights
-    try:
-        model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
-        model.eval()
-    except FileNotFoundError:
-        st.error(f"Model file not found at '{config.MODEL_PATH}'. Please ensure it's uploaded to your Hugging Face Space.")
-        return None, None
-    except Exception as e:
-        st.error(f"An error occurred while loading the model weights: {e}")
-        return None, None
-        
-    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-    return model, tokenizer
+# Load the trained model weights from your .pth file
+model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
+model.eval()
 
-# --- Image & Text Processing ---
+# Load tokenizer
+tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+print("Model and Tokenizer loaded successfully.")
+
+# --- 2. Image Preprocessing Function (reused from your code) ---
 def preprocess_image(image):
     """Preprocess the image for the model."""
-    # This transformation should match the one used during training
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -53,97 +38,58 @@ def preprocess_image(image):
     ])
     return transform(image).unsqueeze(0)
 
-def get_image_from_url(url):
-    """Fetch an image from a URL, with error handling."""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-        response = requests.get(url, headers=headers, stream=True, timeout=10)
-        response.raise_for_status()
-        return Image.open(BytesIO(response.content)).convert("RGB")
-    except requests.exceptions.RequestException as e:
-        st.error(f"Could not fetch image from URL: {e}")
-        return None
+# --- 3. The Main Gradio Function ---
+# This is the core function that Gradio will build a UI around.
+# It takes the inputs from the UI and returns the outputs to the UI.
+def find_best_match(image_input, text_queries_input):
+    """
+    Takes an image and a block of text queries, and returns a dictionary
+    of queries and their similarity scores.
+    """
+    if image_input is None:
+        return "Please provide an image."
+    if not text_queries_input:
+        return "Please provide text descriptions."
 
-# --- Main App UI ---
-st.title("🖼️ CLIP: Image-Text Search")
-st.write("Provide an image and several text descriptions. The app will use your trained CLIP model to find the best textual match for the image.")
-st.markdown("---")
+    # Process the image to get a tensor
+    image_tensor = preprocess_image(image_input).to(device)
 
-# Load the model and tokenizer
-model, tokenizer = load_app_essentials()
+    # Process the text queries into a clean list
+    queries = [q.strip() for q in text_queries_input.split('\n') if q.strip()]
+    if not queries:
+        return "Please provide valid text descriptions."
 
-if model and tokenizer:
-    # Create a two-column layout
-    col1, col2 = st.columns([0.4, 0.6])
+    # Process the text queries to get tokens
+    text_inputs = tokenizer(queries, padding=True, truncation=True, return_tensors="pt").to(device)
 
-    with col1:
-        st.header("Image Input")
-        # Let user choose between upload and URL
-        source = st.radio("Choose image source:", ["Upload a file", "Enter a URL"], label_visibility="collapsed")
-        
-        uploaded_image = None
-        if source == "Upload a file":
-            image_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-            if image_file:
-                uploaded_image = Image.open(image_file).convert("RGB")
-        else:
-            image_url = st.text_input("Image URL:")
-            if image_url:
-                with st.spinner("Fetching image..."):
-                    uploaded_image = get_image_from_url(image_url)
-
-        if uploaded_image:
-            st.image(uploaded_image, caption="Your Image", use_column_width=True)
-
-    with col2:
-        st.header("Text Queries")
-        st.write("Enter one text description per line.")
-        # Use a text area for multiple queries
-        text_queries_input = st.text_area(
-            "Text descriptions", 
-            "a dog running on the beach\na person standing in front of a building\na cat sleeping on a chair\nmountains under a blue sky",
-            height=200,
-            label_visibility="collapsed"
+    # Get model embeddings
+    with torch.no_grad():
+        image_embedding, text_embeddings = model(
+            image_features=image_tensor,
+            text_input_ids=text_inputs['input_ids'],
+            text_attention_mask=text_inputs['attention_mask']
         )
-        # Process input into a clean list of queries
-        queries = [q.strip() for q in text_queries_input.split('\n') if q.strip()]
 
-    st.markdown("---")
+    # Calculate cosine similarity and format for Gradio's Label component
+    image_embedding_norm = F.normalize(image_embedding, p=2, dim=-1)
+    text_embeddings_norm = F.normalize(text_embeddings, p=2, dim=-1)
+    similarity_scores = (image_embedding_norm @ text_embeddings_norm.T).squeeze(0)
+    
+    # Create a results dictionary: { "query text": score, ... }
+    results = {query: score.item() for query, score in zip(queries, similarity_scores)}
+    
+    return results
 
-    # The main action button
-    if st.button("🔍 Find Best Match", use_container_width=True) and uploaded_image and queries:
-        with st.spinner("Analyzing image and text..."):
-            # Process the image to get a tensor
-            image_tensor = preprocess_image(uploaded_image).to(config.DEVICE)
-            
-            # Process the text queries to get tokens
-            text_inputs = tokenizer(queries, padding=True, truncation=True, return_tensors="pt").to(config.DEVICE)
-            
-            # Get model embeddings using the modified forward pass
-            with torch.no_grad():
-                image_embedding, text_embeddings = model(
-                    image_features=image_tensor,
-                    text_input_ids=text_inputs['input_ids'], 
-                    text_attention_mask=text_inputs['attention_mask']
-                )
+# --- 4. Create and Launch the Gradio Interface ---
+iface = gr.Interface(
+    fn=find_best_match,
+    inputs=[
+        gr.Image(type="pil", label="Upload or Drag an Image"),
+        gr.Textbox(lines=5, label="Text Descriptions (one per line)", placeholder="a person on a beach\na black cat\na city skyline at night")
+    ],
+    outputs=gr.Label(num_top_classes=5, label="Results"),
+    title="🖼️ CLIP Image-Text Search",
+    description="Provide an image and several text descriptions. The app will use a trained CLIP model to find the best textual match for the image."
+)
 
-            # Calculate cosine similarity
-            image_embedding_norm = F.normalize(image_embedding, p=2, dim=-1)
-            text_embeddings_norm = F.normalize(text_embeddings, p=2, dim=-1)
-            similarity_scores = (image_embedding_norm @ text_embeddings_norm.T).squeeze(0)
-            
-            # Convert scores to probabilities using softmax for a more intuitive result
-            similarity_probs = F.softmax(similarity_scores, dim=-1)
-
-            st.header("🏆 Results")
-            # Create a sorted list of (query, score) tuples
-            results = sorted(zip(queries, similarity_probs.tolist()), key=lambda x: x[1], reverse=True)
-            
-            # Display results with progress bars
-            for query, score in results:
-                st.write(f'**{score:.2%} match:** "{query}"')
-                st.progress(score)
-
-elif not model or not tokenizer:
-    st.warning("Application could not start. Please check the logs on your Hugging Face Space for any errors during model loading.")
-
+iface.launch()
