@@ -1,88 +1,149 @@
-# app.py
 import streamlit as st
 import torch
 import torch.nn.functional as F
 from PIL import Image
+import requests
+from io import BytesIO
+from torchvision import transforms
 from transformers import DistilBertTokenizer
-from tqdm import tqdm
-from torch.utils.data import DataLoader
 
+# --- Custom Modules ---
 import config
-from model import CLIPModel
-from dataset import Flickr8kDataset
+# This is the updated import line to use the new inference-specific model file
+from inference_model import CLIPModel 
 
-st.set_page_config(layout="wide")
-st.title("🖼️ CLIP-Style Image Search Engine (Textbook Version)")
-st.write("This app uses a model trained according to the textbook's architecture to find images based on text descriptions. The encoders are frozen, and only the projection heads were trained.")
+# --- App Configuration ---
+st.set_page_config(page_title="CLIP Image-Text Search", layout="wide")
 
+# --- Model & Tokenizer Loading ---
 @st.cache_resource
-def load_model_and_tokenizer():
-    """Loads the trained CLIP model and tokenizer once."""
+def load_app_essentials():
+    """Load the CLIP model and tokenizer. Cached for performance."""
+    device = config.DEVICE
+    
+    # Instantiate the model with dimensions from config
     model = CLIPModel(
         image_embedding_dim=config.IMAGE_EMBEDDING_DIM,
         text_embedding_dim=config.TEXT_EMBEDDING_DIM,
         projection_dim=config.PROJECTION_DIM
-    ).to(config.DEVICE)
+    ).to(device)
+    
+    # Load the trained model weights
     try:
-        model.load_state_dict(torch.load(config.MODEL_PATH, map_location=config.DEVICE))
+        model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
+        model.eval()
     except FileNotFoundError:
-        st.error(f"Model file not found at '{config.MODEL_PATH}'. Please train the model first by running `python train.py`.")
+        st.error(f"Model file not found at '{config.MODEL_PATH}'. Please ensure it's uploaded to your Hugging Face Space.")
         return None, None
-    model.eval()
+    except Exception as e:
+        st.error(f"An error occurred while loading the model weights: {e}")
+        return None, None
+        
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
     return model, tokenizer
 
-@st.cache_data
-def get_all_image_embeddings(_model):
-    """Computes and caches embeddings for all images in the dataset."""
-    dataset = Flickr8kDataset(config.IMAGE_DIR, config.CAPTION_FILE, tokenizer=None)
-    dataloader = DataLoader(dataset, batch_size=config.BATCH_SIZE, shuffle=False)
-    
-    all_embeddings = []
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Pre-computing image embeddings"):
-            images = batch['image'].to(config.DEVICE)
-            image_features = _model.vision_encoder(images)
-            image_embeddings = _model.image_projection(image_features)
-            all_embeddings.append(image_embeddings)
-    
-    return torch.cat(all_embeddings), dataset.image_paths
+# --- Image & Text Processing ---
+def preprocess_image(image):
+    """Preprocess the image for the model."""
+    # This transformation should match the one used during training
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    return transform(image).unsqueeze(0)
 
-model, tokenizer = load_model_and_tokenizer()
+def get_image_from_url(url):
+    """Fetch an image from a URL, with error handling."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+        response = requests.get(url, headers=headers, stream=True, timeout=10)
+        response.raise_for_status()
+        return Image.open(BytesIO(response.content)).convert("RGB")
+    except requests.exceptions.RequestException as e:
+        st.error(f"Could not fetch image from URL: {e}")
+        return None
+
+# --- Main App UI ---
+st.title("🖼️ CLIP: Image-Text Search")
+st.write("Provide an image and several text descriptions. The app will use your trained CLIP model to find the best textual match for the image.")
+st.markdown("---")
+
+# Load the model and tokenizer
+model, tokenizer = load_app_essentials()
 
 if model and tokenizer:
-    image_embeddings, image_paths = get_all_image_embeddings(model)
-    st.success("Model loaded and image embeddings are ready!")
+    # Create a two-column layout
+    col1, col2 = st.columns([0.4, 0.6])
 
-    st.header("Search for an Image")
-    query = st.text_input("Enter your search query:", "a dog running on a beach")
-
-    if st.button("Search"):
-        if not query:
-            st.warning("Please enter a search query.")
+    with col1:
+        st.header("Image Input")
+        # Let user choose between upload and URL
+        source = st.radio("Choose image source:", ["Upload a file", "Enter a URL"], label_visibility="collapsed")
+        
+        uploaded_image = None
+        if source == "Upload a file":
+            image_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+            if image_file:
+                uploaded_image = Image.open(image_file).convert("RGB")
         else:
-            with st.spinner("Searching..."):
-                encoded_query = tokenizer([query], return_tensors='pt', padding=True, truncation=True)
-                batch = {k: v.to(config.DEVICE) for k, v in encoded_query.items()}
-                
-                with torch.no_grad():
-                    text_features = model.text_encoder(
-                        input_ids=batch["input_ids"],
-                        attention_mask=batch["attention_mask"]
-                    )
-                    text_embedding = model.text_projection(text_features)
-                
-                text_embedding_norm = F.normalize(text_embedding, p=2, dim=-1)
-                image_embeddings_norm = F.normalize(image_embeddings, p=2, dim=-1)
-                
-                dot_similarity = text_embedding_norm @ image_embeddings_norm.T
-                values, indices = torch.topk(dot_similarity.squeeze(0), 9)
-                top_image_paths = [image_paths[i] for i in indices.cpu().numpy()]
+            image_url = st.text_input("Image URL:")
+            if image_url:
+                with st.spinner("Fetching image..."):
+                    uploaded_image = get_image_from_url(image_url)
 
-            st.success(f"Top {len(top_image_paths)} results for '{query}':")
-            cols = st.columns(3)
-            for i, path in enumerate(top_image_paths):
-                try:
-                    cols[i % 3].image(Image.open(path), use_column_width=True, caption=f"Result {i+1}")
-                except Exception as e:
-                    cols[i % 3].error(f"Could not load image {i+1}.\nError: {e}")
+        if uploaded_image:
+            st.image(uploaded_image, caption="Your Image", use_column_width=True)
+
+    with col2:
+        st.header("Text Queries")
+        st.write("Enter one text description per line.")
+        # Use a text area for multiple queries
+        text_queries_input = st.text_area(
+            "Text descriptions", 
+            "a dog running on the beach\na person standing in front of a building\na cat sleeping on a chair\nmountains under a blue sky",
+            height=200,
+            label_visibility="collapsed"
+        )
+        # Process input into a clean list of queries
+        queries = [q.strip() for q in text_queries_input.split('\n') if q.strip()]
+
+    st.markdown("---")
+
+    # The main action button
+    if st.button("🔍 Find Best Match", use_container_width=True) and uploaded_image and queries:
+        with st.spinner("Analyzing image and text..."):
+            # Process the image to get a tensor
+            image_tensor = preprocess_image(uploaded_image).to(config.DEVICE)
+            
+            # Process the text queries to get tokens
+            text_inputs = tokenizer(queries, padding=True, truncation=True, return_tensors="pt").to(config.DEVICE)
+            
+            # Get model embeddings using the modified forward pass
+            with torch.no_grad():
+                image_embedding, text_embeddings = model(
+                    image_features=image_tensor,
+                    text_input_ids=text_inputs['input_ids'], 
+                    text_attention_mask=text_inputs['attention_mask']
+                )
+
+            # Calculate cosine similarity
+            image_embedding_norm = F.normalize(image_embedding, p=2, dim=-1)
+            text_embeddings_norm = F.normalize(text_embeddings, p=2, dim=-1)
+            similarity_scores = (image_embedding_norm @ text_embeddings_norm.T).squeeze(0)
+            
+            # Convert scores to probabilities using softmax for a more intuitive result
+            similarity_probs = F.softmax(similarity_scores, dim=-1)
+
+            st.header("🏆 Results")
+            # Create a sorted list of (query, score) tuples
+            results = sorted(zip(queries, similarity_probs.tolist()), key=lambda x: x[1], reverse=True)
+            
+            # Display results with progress bars
+            for query, score in results:
+                st.write(f'**{score:.2%} match:** "{query}"')
+                st.progress(score)
+
+elif not model or not tokenizer:
+    st.warning("Application could not start. Please check the logs on your Hugging Face Space for any errors during model loading.")
+

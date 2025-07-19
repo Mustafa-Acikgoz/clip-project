@@ -2,7 +2,7 @@
 import torch
 
 # --- Project Paths ---
-IMAGE_DIR = "data/Flickr8k_Dataset"
+IMAGE_DIR = "data/Flicker8k_Dataset"
 CAPTION_FILE = "data/captions.txt"
 MODEL_PATH = "clip_book_model.pth"
 
