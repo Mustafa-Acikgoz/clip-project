@@ -38,12 +38,11 @@ except Exception as e:
 tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 print("Tokenizer loaded successfully.")
 
-
 # --- 2. Data Handling: Download and Pre-process Images (runs once on startup) ---
 # This is the key section that connects your app to your image dataset.
 
 # Define the dataset repository on the Hugging Face Hub
-DATASET_REPO_ID = "mustafa2ak/Flickr8k-Images" 
+DATASET_REPO_ID = "mustafa2ak/Flickr8k-Images"
 # Define the local folder where the images will be stored inside the Space
 IMAGE_STORAGE_PATH = "./flickr8k_images"
 
@@ -58,8 +57,9 @@ snapshot_download(
 print("Image dataset download complete.")
 
 # Get a list of all image file paths from the downloaded folder
-# It looks for all .jpg files inside the 'images' subfolder you created
-all_image_paths = glob.glob(os.path.join(IMAGE_STORAGE_PATH, "images", "*.jpg"))
+# **CORRECTION**: The dataset structure has images directly in 'Flicker8k_Dataset'
+# The original code was looking for a subfolder named 'images', which doesn't exist.
+all_image_paths = glob.glob(os.path.join(IMAGE_STORAGE_PATH, "Flicker8k_Dataset", "*.jpg"))
 print(f"Found {len(all_image_paths)} images.")
 
 # Define the image preprocessing pipeline
@@ -102,7 +102,6 @@ else:
     image_embeddings_precomputed = None
     print("Skipping embedding pre-computation due to missing model or images.")
 
-
 # --- 3. The Main Gradio Function for Text-to-Image Search ---
 def find_image_from_text(text_query):
     """
@@ -118,7 +117,7 @@ def find_image_from_text(text_query):
         # 1. Process the text query into tokens and get its embedding
         text_inputs = tokenizer([text_query], padding=True, truncation=True, return_tensors="pt").to(device)
         text_embedding = model.text_encoder(
-            input_ids=text_inputs['input_ids'], 
+            input_ids=text_inputs['input_ids'],
             attention_mask=text_inputs['attention_mask']
         )
         # 2. Normalize the text embedding
@@ -130,11 +129,11 @@ def find_image_from_text(text_query):
 
         # 4. Find the index of the image with the highest score
         best_image_index = similarity_scores.argmax().item()
-        
+
         # 5. Get the file path of the best image
         best_image_path = all_image_paths[best_image_index]
         best_score = similarity_scores[best_image_index].item()
-        
+
         print(f"Found best match: {best_image_path} with score {best_score:.4f}")
 
         # Return the path to the best image and a caption for the UI
