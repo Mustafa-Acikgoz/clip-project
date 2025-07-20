@@ -1,0 +1,4 @@
+data/
+__pycache__/
+venv/
+flickr8k_images/
