@@ -7,9 +7,9 @@ CAPTION_FILE = "data/captions.txt" # This path might need adjustment if captions
 MODEL_PATH = "clip_book_model.pth"
 
 # --- Model Dimensions ---
-IMAGE_EMBEDDING_DIM = 2048  # ResNet50 output dimension
-TEXT_EMBEDDING_DIM = 768    # DistilBERT output dimension
-PROJECTION_DIM = 256        # Shared embedding space dimension
+IMAGE_EMBEDDING_DIM = 2048  
+TEXT_EMBEDDING_DIM = 768  
+PROJECTION_DIM = 256  
 
 # --- Training Parameters ---
 BATCH_SIZE = 32
