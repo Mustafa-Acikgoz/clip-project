@@ -24,11 +24,13 @@ model = CLIPModel(
     projection_dim=config.PROJECTION_DIM
 ).to(device)
 
-# --- CRITICAL STEP ---
-# The application will fail if it cannot find the file specified in config.MODEL_PATH.
-# Make sure "clip_book_model.pth" is in the same directory as this script.
+# --- CRITICAL STEP (Corrected) ---
+# Load the state dictionary with `strict=False`.
+# This allows the model to load only the weights present in the file (e.g., your trained
+# projection heads) and ignore the missing ones (e.g., the base ResNet and DistilBERT weights,
+# which are already pre-loaded by the model class itself).
 try:
-    model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
+    model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device), strict=False)
     model.eval()
     print("CLIP Model loaded successfully.")
 except Exception as e:
@@ -56,8 +58,9 @@ print("Image dataset download complete.")
 # Get a list of all image file paths
 all_image_paths = glob.glob(os.path.join(IMAGE_STORAGE_PATH, "Flicker8k_Dataset", "*.jpg"))
 
-# Use a smaller subset of images to prevent timeouts on public platforms.
-NUM_IMAGES_TO_PROCESS = 1000
+# Use a smaller subset of images to prevent timeouts and for faster testing.
+# You can increase this value after confirming the app works.
+NUM_IMAGES_TO_PROCESS = 100
 all_image_paths = all_image_paths[:NUM_IMAGES_TO_PROCESS]
 print(f"Found {len(all_image_paths)} total images. Using a subset of {NUM_IMAGES_TO_PROCESS} to prevent timeout.")
 
@@ -78,6 +81,7 @@ def precompute_image_embeddings(image_paths, model, transform, device):
                 image = Image.open(path).convert("RGB")
                 image_tensor = transform(image).unsqueeze(0).to(device)
                 
+                # Pass image_features to the model to get the embedding
                 embedding, _ = model(image_features=image_tensor)
                 
                 all_embeddings.append(embedding)
@@ -111,7 +115,6 @@ def find_image_from_text(text_query):
         text_inputs = tokenizer([text_query], padding=True, truncation=True, return_tensors="pt").to(device)
         
         # 2. Get the projected text embedding from the model.
-        # No change is needed here because inference_model.py was updated to expect 'attention_mask'.
         _, text_embedding = model(
             text_input_ids=text_inputs['input_ids'],
             attention_mask=text_inputs['attention_mask']
@@ -142,7 +145,7 @@ iface = gr.Interface(
         gr.Textbox(label="Result Details")
     ],
     title="🖼️ Text-to-Image Search with CLIP",
-    description="Enter a text description to search for the most relevant image in the Flickr8k dataset. The app uses a pre-trained CLIP-like model to find the best match from a subset of 1000 images.",
+    description="Enter a text description to search for the most relevant image in the Flickr8k dataset. The app uses a pre-trained CLIP-like model to find the best match.",
     allow_flagging="never"
 )
 
