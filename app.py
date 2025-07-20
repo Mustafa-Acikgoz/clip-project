@@ -24,7 +24,9 @@ model = CLIPModel(
     projection_dim=config.PROJECTION_DIM
 ).to(device)
 
-# Load your trained model weights (.pth file)
+# --- CRITICAL STEP ---
+# The application will fail if it cannot find the file specified in config.MODEL_PATH.
+# Make sure "clip_book_model.pth" is in the same directory as this script.
 try:
     model.load_state_dict(torch.load(config.MODEL_PATH, map_location=device))
     model.eval()
@@ -47,15 +49,14 @@ snapshot_download(
     repo_id=DATASET_REPO_ID,
     repo_type="dataset",
     local_dir=IMAGE_STORAGE_PATH,
-    local_dir_use_symlinks=False # Set to False for Spaces compatibility
+    local_dir_use_symlinks=False
 )
 print("Image dataset download complete.")
 
 # Get a list of all image file paths
 all_image_paths = glob.glob(os.path.join(IMAGE_STORAGE_PATH, "Flicker8k_Dataset", "*.jpg"))
 
-# **CRITICAL FIX FOR TIMEOUT**: Use a smaller subset of images for the demo.
-# Processing all 8000+ images on startup will cause a timeout on Hugging Face Spaces.
+# Use a smaller subset of images to prevent timeouts on public platforms.
 NUM_IMAGES_TO_PROCESS = 1000
 all_image_paths = all_image_paths[:NUM_IMAGES_TO_PROCESS]
 print(f"Found {len(all_image_paths)} total images. Using a subset of {NUM_IMAGES_TO_PROCESS} to prevent timeout.")
@@ -77,8 +78,6 @@ def precompute_image_embeddings(image_paths, model, transform, device):
                 image = Image.open(path).convert("RGB")
                 image_tensor = transform(image).unsqueeze(0).to(device)
                 
-                # **CORRECTION**: Use the full model's forward pass to get projected embeddings.
-                # This returns (image_embedding, text_embedding), so we take the first element.
                 embedding, _ = model(image_features=image_tensor)
                 
                 all_embeddings.append(embedding)
@@ -111,8 +110,8 @@ def find_image_from_text(text_query):
         # 1. Process the text query
         text_inputs = tokenizer([text_query], padding=True, truncation=True, return_tensors="pt").to(device)
         
-        # 2. **CORRECTION**: Use the full model's forward pass to get projected text embedding.
-        # This returns (image_embedding, text_embedding), so we take the second element.
+        # 2. Get the projected text embedding from the model.
+        # No change is needed here because inference_model.py was updated to expect 'attention_mask'.
         _, text_embedding = model(
             text_input_ids=text_inputs['input_ids'],
             attention_mask=text_inputs['attention_mask']

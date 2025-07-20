@@ -61,18 +61,18 @@ class CLIPModel(nn.Module):
     def __init__(self, image_embedding_dim, text_embedding_dim, projection_dim):
         super().__init__()
         
-        # **CORRECTION**: Renamed 'vision_encoder' to 'image_encoder'
-        # This attribute MUST be named 'image_encoder' to match the call in app.py
         self.image_encoder = VisionEncoder()
-        
         self.text_encoder = TextEncoder()
         self.image_projection = ProjectionHead(embedding_dim=image_embedding_dim, projection_dim=projection_dim)
         self.text_projection = ProjectionHead(embedding_dim=text_embedding_dim, projection_dim=projection_dim)
 
-    def forward(self, image_features=None, text_input_ids=None, text_attention_mask=None):
+    def forward(self, image_features=None, text_input_ids=None, attention_mask=None):
         """
         This forward pass handles both image and text inputs.
         app.py will call this to get the final, projected embeddings.
+        
+        **MODIFICATION**: Renamed 'text_attention_mask' to 'attention_mask' for
+        compatibility with the standard Hugging Face tokenizer output.
         """
         image_embedding = None
         if image_features is not None:
@@ -86,7 +86,7 @@ class CLIPModel(nn.Module):
             # Get raw features from the text backbone
             text_features_raw = self.text_encoder(
                 input_ids=text_input_ids,
-                attention_mask=text_attention_mask
+                attention_mask=attention_mask
             )
             # Project them into the shared embedding space
             text_embedding = self.text_projection(text_features_raw)
