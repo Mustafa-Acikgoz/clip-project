@@ -60,7 +60,7 @@ all_image_paths = glob.glob(os.path.join(IMAGE_STORAGE_PATH, "Flicker8k_Dataset"
 
 # Use a smaller subset of images to prevent timeouts and for faster testing.
 # You can increase this value after confirming the app works.
-NUM_IMAGES_TO_PROCESS = 100
+NUM_IMAGES_TO_PROCESS = 1000
 all_image_paths = all_image_paths[:NUM_IMAGES_TO_PROCESS]
 print(f"Found {len(all_image_paths)} total images. Using a subset of {NUM_IMAGES_TO_PROCESS} to prevent timeout.")
 
