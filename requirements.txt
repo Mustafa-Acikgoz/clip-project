@@ -4,3 +4,4 @@ transformers
 huggingface_hub
 Pillow
 numpy
+gradio
